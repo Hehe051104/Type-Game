@@ -26,6 +26,9 @@ bool paused = false;         // 是否暂停
 int difficulty = 1;          // 1=简单 2=普通 3=困难
 int letterCount = 1;         // 当前下落字母数量
 int fallSpeed = 8;           // 当前下落速度
+int highScore = 0; // 最高分纪录
+int combo = 0;    // 连击数
+int maxCombo = 0; // 最大连击
 
 struct FallingLetter {
     TCHAR ch;
@@ -60,20 +63,33 @@ void NewLetter(HWND hWnd)
 // 绘制游戏画面
 void PaintGame(HWND hWnd, HDC hdc)
 {
+    // 在 PaintGame 函数开头，动态计算字号和布局
     RECT rcClient;
     GetClientRect(hWnd, &rcClient);
+    int winW = rcClient.right - rcClient.left;
+    int winH = rcClient.bottom - rcClient.top;
+    int margin = winH / 20;
+    int infoWidth = max(winW / 5, 120);
+    int fontSize = max(winH / 20, 16);
 
-    // 左侧为游戏区域，右侧显示得分信息
+    // 创建自适应字体
+    if (g_hFontLetter) DeleteObject(g_hFontLetter);
+    g_hFontLetter = CreateFontW(-fontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        FIXED_PITCH | FF_MODERN, TEXT("Consolas"));
+    if (g_hFontInfo) DeleteObject(g_hFontInfo);
+    g_hFontInfo = CreateFontW(-fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS, TEXT("Segoe UI"));
+
+    // 游戏区和信息区动态布局
+    int playRight = winW - infoWidth;
     g_rcPlay = rcClient;
-    int infoWidth = 160;            // 右侧信息栏宽度
-    g_rcPlay.right -= infoWidth;    // 调整左侧游戏区域宽度
-
-    // 为了更接近教材效果，预留出内部边距
-    int marginLeft   = 50;
-    int marginTop    = 40;
-    int marginRight  = 20;
-    int marginBottom = 60;          // 底部留出一行字母提示
-
+    g_rcPlay.right = playRight;
+    int marginLeft   = margin;
+    int marginTop    = margin;
+    int marginRight  = margin;
+    int marginBottom = margin * 2;
     g_rcBox = {
         g_rcPlay.left + marginLeft,
         g_rcPlay.top + marginTop,
@@ -84,49 +100,37 @@ void PaintGame(HWND hWnd, HDC hdc)
     // 画出游戏矩形边框
     Rectangle(hdc, g_rcBox.left, g_rcBox.top, g_rcBox.right, g_rcBox.bottom);
 
-    // 绘制所有下落字母
+    // 字体和字母声明
     HFONT oldFont = NULL;
+    TCHAR szKeys[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    // 底部和下落字母都用同一个字体对象 g_hFontLetter
     if (g_hFontLetter)
         oldFont = (HFONT)SelectObject(hdc, g_hFontLetter);
-    if (g_charWidth == 0 || g_charHeight == 0)
+    SetTextAlign(hdc, TA_CENTER | TA_TOP);
+
+    // 等分下落区域宽度，每个字母居中
+    int availableWidth = g_rcBox.right - g_rcBox.left;
+    int cellW = availableWidth / 26;
+    int bottomStartX = g_rcBox.left;
+    // 绘制底部字母
+    int bottomY = g_rcBox.bottom - g_charHeight - 8;
+    for (int i = 0; i < 26; ++i)
     {
-        SIZE size;
-        GetTextExtentPoint32(hdc, TEXT("A"), 1, &size);
-        g_charWidth = size.cx;
-        g_charHeight = size.cy;
+        int centerX = bottomStartX + cellW * i + cellW / 2;
+        wchar_t wch = szKeys[i];
+        TextOutW(hdc, centerX, bottomY, &wch, 1);
     }
-    int totalWidth = g_charWidth * 26;
-    int playWidth = g_rcBox.right - g_rcBox.left;
-    int leftOffset = 0;
-    if (totalWidth < playWidth)
-        leftOffset = (playWidth - totalWidth) / 2;
-    SetTextAlign(hdc, TA_LEFT | TA_TOP);
+    // 绘制下落字母
     for (int i = 0; i < letterCount; ++i) {
         int index = letters[i].ch - 'A';
         index = max(0, min(25, index));
-        int letterX = g_rcBox.left + leftOffset + index * g_charWidth;
+        int centerX = bottomStartX + cellW * index + cellW / 2;
         int letterY = g_rcBox.top + 8 + letters[i].y;
-        TCHAR sz[2] = { letters[i].ch, 0 };
+        wchar_t wch = letters[i].ch;
         SetTextColor(hdc, RGB(0, 0, 0));
-        TextOut(hdc, letterX, letterY, sz, 1);
+        TextOutW(hdc, centerX, letterY, &wch, 1);
     }
-    if (oldFont)
-        SelectObject(hdc, oldFont);
-
-    // 底部显示键盘上的 26 个字母，提示玩家可以按的键
-    TCHAR szKeys[] = TEXT("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-    // 在客户端区域内靠左下方显示一行字母，避免超出窗口
-    int bottomY = g_rcBox.bottom - g_charHeight - 8;
-    if (g_hFontLetter)
-        oldFont = (HFONT)SelectObject(hdc, g_hFontLetter);
-    SetTextAlign(hdc, TA_LEFT | TA_TOP);
-
-    int bottomStartX = g_rcBox.left + leftOffset;
-    for (int i = 0; i < 26; ++i)
-    {
-        TextOut(hdc, bottomStartX + i * g_charWidth, bottomY, szKeys + i, 1);
-    }
-
     if (oldFont)
         SelectObject(hdc, oldFont);
 
@@ -149,9 +153,10 @@ void PaintGame(HWND hWnd, HDC hdc)
     TextOut(hdc, infoX, infoY, buf, lstrlen(buf));
 
     // 分数、生命、难度、暂停提示一起显示在左上角
-    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)  4-暂停/继续"),
+    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)  4-暂停/继续  最高分:%d  连击:%d"),
         g_nScore, lives,
-        (difficulty == 1 ? TEXT("简单") : (difficulty == 2 ? TEXT("普通") : TEXT("困难"))));
+        (difficulty == 1 ? TEXT("简单") : (difficulty == 2 ? TEXT("普通") : TEXT("困难"))),
+        highScore, combo);
     SetTextColor(hdc, RGB(255, 128, 0));
     TextOut(hdc, g_rcPlay.left + 10, g_rcPlay.top + 10, buf, lstrlen(buf));
 
@@ -164,9 +169,9 @@ void PaintGame(HWND hWnd, HDC hdc)
 
     // 游戏失败提示（生命扣完）
     if (gameOver) {
-        std::wstring over = L"游戏失败! 按 R 重新开始";
+        wsprintf(buf, TEXT("游戏失败! 按R重开 最高分:%d  最大连击:%d"), highScore, maxCombo);
         SetTextColor(hdc, RGB(255, 0, 0));
-        TextOutW(hdc, rcClient.right / 2 - 120, rcClient.bottom / 2, over.c_str(), (int)over.size());
+        TextOut(hdc, g_rcPlay.left + 80, g_rcPlay.top + 180, buf, lstrlen(buf));
     }
 
     if (oldFont)
@@ -221,9 +226,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (missed) {
                 g_nMiss++;
                 lives--;
+                combo = 0; // 连击断了
                 if (lives <= 0) {
                     lives = 0;
                     gameOver = true;
+                    if (g_nScore > highScore) highScore = g_nScore;
                     KillTimer(hWnd, g_uTimerId);
                 } else {
                     NewLetter(hWnd);
@@ -243,7 +250,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (!gameOver && lives > 0) {
             for (int i = 0; i < letterCount; ++i) {
                 if (ch == letters[i].ch && letters[i].y < (g_rcBox.bottom - g_rcBox.top)) {
-                    g_nScore++;
+                    combo++;
+                    if (combo > maxCombo) maxCombo = combo;
+                    int addScore = (combo >= 3 ? 2 : 1); // 连击>=3分数加倍
+                    g_nScore += addScore;
                     letters[i].ch = 'A' + rand() % 26;
                     letters[i].y = 0;
                 }
@@ -273,6 +283,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 g_nMiss = 0;
                 lives = 5;
                 paused = false;
+                combo = 0;
+                maxCombo = 0;
                 NewLetter(hWnd);
                 InvalidateRect(hWnd, NULL, TRUE);
                 SetTimer(hWnd, g_uTimerId, 80, NULL);
@@ -347,8 +359,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         0,
         CLASS_NAME,
         L"简易打字游戏",
-        WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME, // 禁止拖动改变大小，界面更接近教材示例
-        CW_USEDEFAULT, CW_USEDEFAULT, 600, 500,
+        WS_OVERLAPPEDWINDOW | WS_SIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1400, 700,
         nullptr,
         nullptr,
         hInstance,
