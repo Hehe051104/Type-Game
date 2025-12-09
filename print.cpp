@@ -148,12 +148,19 @@ void PaintGame(HWND hWnd, HDC hdc)
     wsprintf(buf, TEXT("当前失误: %d"), g_nMiss);
     TextOut(hdc, infoX, infoY, buf, lstrlen(buf));
 
-    // 分数、生命、难度一起显示在左上角
-    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)"),
+    // 分数、生命、难度、暂停提示一起显示在左上角
+    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)  4-暂停/继续"),
         g_nScore, lives,
         (difficulty == 1 ? TEXT("简单") : (difficulty == 2 ? TEXT("普通") : TEXT("困难"))));
     SetTextColor(hdc, RGB(255, 128, 0));
     TextOut(hdc, g_rcPlay.left + 10, g_rcPlay.top + 10, buf, lstrlen(buf));
+
+    // 暂停时中央显示提示
+    if (paused && !gameOver) {
+        wsprintf(buf, TEXT("已暂停，按4继续"));
+        SetTextColor(hdc, RGB(0, 128, 255));
+        TextOut(hdc, g_rcPlay.left + 120, g_rcPlay.top + 180, buf, lstrlen(buf));
+    }
 
     // 游戏失败提示（生命扣完）
     if (gameOver) {
@@ -276,6 +283,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (wParam == '1') { difficulty = 1; NewLetter(hWnd); }
             else if (wParam == '2') { difficulty = 2; NewLetter(hWnd); }
             else if (wParam == '3') { difficulty = 3; NewLetter(hWnd); }
+        }
+        // 处理游戏暂停与继续
+        if (wParam == '4') {
+            paused = !paused;
+            if (paused) KillTimer(hWnd, g_uTimerId);
+            else if (!gameOver) SetTimer(hWnd, g_uTimerId, 80, NULL);
+            InvalidateRect(hWnd, NULL, TRUE);
         }
         return 0;
     }
