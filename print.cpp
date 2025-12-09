@@ -23,26 +23,37 @@ HFONT  g_hFontInfo   = NULL; // 信息区字体
 int lives = 5;               // 玩家生命值
 bool gameOver = false;       // 游戏是否结束
 bool paused = false;         // 是否暂停
+int difficulty = 1;          // 1=简单 2=普通 3=困难
+int letterCount = 1;         // 当前下落字母数量
+int fallSpeed = 8;           // 当前下落速度
+
+struct FallingLetter {
+    TCHAR ch;
+    int y;
+};
+FallingLetter letters[3];    // 最多3个字母
 
 // 根据当前得分动态调整速度（简单难度提升策略）
 void UpdateSpeed()
 {
-    if (g_nScore < 10)
-        g_nSpeed = 8;
-    else if (g_nScore < 20)
-        g_nSpeed = 10;
-    else if (g_nScore < 40)
-        g_nSpeed = 13;
-    else
-        g_nSpeed = 16;
+    // 根据难度设置速度
+    if (difficulty == 1) fallSpeed = 8;
+    else if (difficulty == 2) fallSpeed = 13;
+    else fallSpeed = 18;
 }
 
 // 生成一个新的随机字母并把位置重置到顶部
 void NewLetter(HWND hWnd)
 {
-    g_chFalling = 'A' + rand() % 26;
-    g_nY = 0;
     UpdateSpeed();
+    // 根据难度设置下落字母数量
+    if (difficulty == 1) letterCount = 1;
+    else if (difficulty == 2) letterCount = 2;
+    else letterCount = 3;
+    for (int i = 0; i < letterCount; ++i) {
+        letters[i].ch = 'A' + rand() % 26;
+        letters[i].y = 0;
+    }
     InvalidateRect(hWnd, NULL, TRUE);
 }
 
@@ -73,16 +84,10 @@ void PaintGame(HWND hWnd, HDC hdc)
     // 画出游戏矩形边框
     Rectangle(hdc, g_rcBox.left, g_rcBox.top, g_rcBox.right, g_rcBox.bottom);
 
-    // 落下字母与底部提示字母左对齐，保持大小一致
-    TCHAR sz[2] = { g_chFalling, 0 };
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(0, 0, 0));
-
+    // 绘制所有下落字母
     HFONT oldFont = NULL;
     if (g_hFontLetter)
         oldFont = (HFONT)SelectObject(hdc, g_hFontLetter);
-
-    // 计算字母宽度，用于对齐
     if (g_charWidth == 0 || g_charHeight == 0)
     {
         SIZE size;
@@ -90,22 +95,21 @@ void PaintGame(HWND hWnd, HDC hdc)
         g_charWidth = size.cx;
         g_charHeight = size.cy;
     }
-
-    int index = g_chFalling - 'A';
-    index = max(0, min(25, index));
-
     int totalWidth = g_charWidth * 26;
     int playWidth = g_rcBox.right - g_rcBox.left;
     int leftOffset = 0;
     if (totalWidth < playWidth)
         leftOffset = (playWidth - totalWidth) / 2;
-
-    // 下落字母绘制位置：与底部字母行保持同一列
-    int letterX = g_rcBox.left + leftOffset + index * g_charWidth;
-    int letterY = g_rcBox.top + 8 + g_nY;
     SetTextAlign(hdc, TA_LEFT | TA_TOP);
-    TextOut(hdc, letterX, letterY, sz, 1);
-
+    for (int i = 0; i < letterCount; ++i) {
+        int index = letters[i].ch - 'A';
+        index = max(0, min(25, index));
+        int letterX = g_rcBox.left + leftOffset + index * g_charWidth;
+        int letterY = g_rcBox.top + 8 + letters[i].y;
+        TCHAR sz[2] = { letters[i].ch, 0 };
+        SetTextColor(hdc, RGB(0, 0, 0));
+        TextOut(hdc, letterX, letterY, sz, 1);
+    }
     if (oldFont)
         SelectObject(hdc, oldFont);
 
@@ -143,6 +147,13 @@ void PaintGame(HWND hWnd, HDC hdc)
     infoY += 40;
     wsprintf(buf, TEXT("当前失误: %d"), g_nMiss);
     TextOut(hdc, infoX, infoY, buf, lstrlen(buf));
+
+    // 分数、生命、难度一起显示在左上角
+    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)"),
+        g_nScore, lives,
+        (difficulty == 1 ? TEXT("简单") : (difficulty == 2 ? TEXT("普通") : TEXT("困难"))));
+    SetTextColor(hdc, RGB(255, 128, 0));
+    TextOut(hdc, g_rcPlay.left + 10, g_rcPlay.top + 10, buf, lstrlen(buf));
 
     // 游戏失败提示（生命扣完）
     if (gameOver) {
@@ -190,13 +201,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_TIMER:
         if (wParam == g_uTimerId && !paused && !gameOver)
         {
-            g_nY += g_nSpeed;
-
             int boxHeight = g_rcBox.bottom - g_rcBox.top;
             int charHeight = g_charHeight > 0 ? g_charHeight : 28;
             int maxY = boxHeight > 0 ? boxHeight - charHeight - 5 : (g_rcPlay.bottom - g_rcPlay.top) - 120;
-            if (g_nY >= maxY)
-            {
+            bool missed = false;
+            for (int i = 0; i < letterCount; ++i) {
+                letters[i].y += fallSpeed;
+                if (letters[i].y >= maxY) {
+                    missed = true;
+                }
+            }
+            if (missed) {
                 g_nMiss++;
                 lives--;
                 if (lives <= 0) {
@@ -218,10 +233,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (ch >= 'a' && ch <= 'z')
             ch = ch - 'a' + 'A';
 
-        if (!gameOver && lives > 0 && ch == g_chFalling)
-        {
-            g_nScore++;
-            NewLetter(hWnd);
+        if (!gameOver && lives > 0) {
+            for (int i = 0; i < letterCount; ++i) {
+                if (ch == letters[i].ch && letters[i].y < (g_rcBox.bottom - g_rcBox.top)) {
+                    g_nScore++;
+                    letters[i].ch = 'A' + rand() % 26;
+                    letters[i].y = 0;
+                }
+            }
         }
         return 0;
     }
@@ -251,6 +270,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 InvalidateRect(hWnd, NULL, TRUE);
                 SetTimer(hWnd, g_uTimerId, 80, NULL);
             }
+        }
+        // 难度选择
+        if (!gameOver && !paused) {
+            if (wParam == '1') { difficulty = 1; NewLetter(hWnd); }
+            else if (wParam == '2') { difficulty = 2; NewLetter(hWnd); }
+            else if (wParam == '3') { difficulty = 3; NewLetter(hWnd); }
         }
         return 0;
     }
