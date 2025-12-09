@@ -30,11 +30,18 @@ int highScore = 0; // 最高分纪录
 int combo = 0;    // 连击数
 int maxCombo = 0; // 最大连击
 
+// 修改结构体，支持完整单词
 struct FallingLetter {
-    TCHAR ch;
+    wchar_t word[16];
     int y;
+    int typedLen; // 已输入字符数
 };
 FallingLetter letters[3];    // 最多3个字母
+
+// 模式相关变量
+int mode = 0; // 0=字母模式，1=单词模式
+const wchar_t* wordList[] = {L"APPLE",L"BANANA",L"ORANGE",L"PEACH",L"GRAPE",L"LEMON",L"MANGO",L"PEAR",L"PLUM",L"KIWI"};
+const int wordCount = sizeof(wordList)/sizeof(wordList[0]);
 
 // 根据当前得分动态调整速度（简单难度提升策略）
 void UpdateSpeed()
@@ -53,9 +60,21 @@ void NewLetter(HWND hWnd)
     if (difficulty == 1) letterCount = 1;
     else if (difficulty == 2) letterCount = 2;
     else letterCount = 3;
-    for (int i = 0; i < letterCount; ++i) {
-        letters[i].ch = 'A' + rand() % 26;
-        letters[i].y = 0;
+    if (mode == 0) {
+        for (int i = 0; i < letterCount; ++i) {
+            letters[i].word[0] = 'A' + rand() % 26;
+            letters[i].word[1] = 0;
+            letters[i].y = 0;
+            letters[i].typedLen = 0;
+        }
+    } else {
+        for (int i = 0; i < letterCount; ++i) {
+            int idx = rand() % wordCount;
+            wcsncpy_s(letters[i].word, 16, wordList[idx], 15);
+            letters[i].word[15] = 0;
+            letters[i].y = 0;
+            letters[i].typedLen = 0;
+        }
     }
     InvalidateRect(hWnd, NULL, TRUE);
 }
@@ -115,21 +134,49 @@ void PaintGame(HWND hWnd, HDC hdc)
     int bottomStartX = g_rcBox.left;
     // 绘制底部字母
     int bottomY = g_rcBox.bottom - g_charHeight - 8;
-    for (int i = 0; i < 26; ++i)
-    {
-        int centerX = bottomStartX + cellW * i + cellW / 2;
-        wchar_t wch = szKeys[i];
-        TextOutW(hdc, centerX, bottomY, &wch, 1);
+    if (mode == 0) {
+        // 显示26个字母
+        for (int i = 0; i < 26; ++i)
+        {
+            int centerX = bottomStartX + cellW * i + cellW / 2;
+            wchar_t wch = 'A' + i;
+            TextOutW(hdc, centerX, bottomY, &wch, 1);
+        }
+    } else {
+        // 显示单词
+        for (int i = 0; i < wordCount; ++i) {
+            int cellWw = availableWidth / wordCount;
+            int centerX = bottomStartX + cellWw * i + cellWw / 2;
+            TextOutW(hdc, centerX, bottomY, wordList[i], wcslen(wordList[i]));
+        }
     }
     // 绘制下落字母
     for (int i = 0; i < letterCount; ++i) {
-        int index = letters[i].ch - 'A';
-        index = max(0, min(25, index));
-        int centerX = bottomStartX + cellW * index + cellW / 2;
-        int letterY = g_rcBox.top + 8 + letters[i].y;
-        wchar_t wch = letters[i].ch;
-        SetTextColor(hdc, RGB(0, 0, 0));
-        TextOutW(hdc, centerX, letterY, &wch, 1);
+        int centerX, letterY;
+        if (mode == 0) {
+            int index = letters[i].word[0] - 'A';
+            index = max(0, min(25, index));
+            centerX = bottomStartX + cellW * index + cellW / 2;
+            letterY = g_rcBox.top + 8 + letters[i].y;
+            wchar_t wch = letters[i].word[0];
+            SetTextColor(hdc, RGB(0, 0, 0));
+            TextOutW(hdc, centerX, letterY, &wch, 1);
+        } else {
+            // 单词模式：下落区显示完整单词，位置与底部单词一一对应
+            int cellWw = availableWidth / wordCount;
+            // 找到当前下落单词在 wordList 中的索引
+            int wordIdx = 0;
+            for (int k = 0; k < wordCount; ++k) {
+                if (wcscmp(letters[i].word, wordList[k]) == 0) {
+                    wordIdx = k;
+                    break;
+                }
+            }
+            centerX = bottomStartX + cellWw * wordIdx + cellWw / 2;
+            letterY = g_rcBox.top + 8 + letters[i].y;
+            SetTextColor(hdc, RGB(0, 0, 0));
+            TextOutW(hdc, centerX, letterY, letters[i].word, wcslen(letters[i].word));
+        }
     }
     if (oldFont)
         SelectObject(hdc, oldFont);
@@ -138,7 +185,7 @@ void PaintGame(HWND hWnd, HDC hdc)
     RECT rcInfo = rcClient;
     rcInfo.left = g_rcPlay.right + 30; // 信息区稍微右移一点
 
-    TCHAR buf[64];
+    wchar_t buf[128]; // 扩大缓冲区，防止溢出
     if (g_hFontInfo)
         oldFont = (HFONT)SelectObject(hdc, g_hFontInfo);
     SetTextAlign(hdc, TA_LEFT | TA_TOP);
@@ -153,9 +200,10 @@ void PaintGame(HWND hWnd, HDC hdc)
     TextOut(hdc, infoX, infoY, buf, lstrlen(buf));
 
     // 分数、生命、难度、暂停提示一起显示在左上角
-    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)  4-暂停/继续  最高分:%d  连击:%d"),
+    wsprintf(buf, TEXT("分数:%d  生命:%d  难度:%s (1/2/3切换)  4-暂停/继续  F2-切换模式[%s]  最高分:%d  连击:%d"),
         g_nScore, lives,
         (difficulty == 1 ? TEXT("简单") : (difficulty == 2 ? TEXT("普通") : TEXT("困难"))),
+        (mode == 0 ? TEXT("字母") : TEXT("单词")),
         highScore, combo);
     SetTextColor(hdc, RGB(255, 128, 0));
     TextOut(hdc, g_rcPlay.left + 10, g_rcPlay.top + 10, buf, lstrlen(buf));
@@ -248,14 +296,42 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ch = ch - 'a' + 'A';
 
         if (!gameOver && lives > 0) {
-            for (int i = 0; i < letterCount; ++i) {
-                if (ch == letters[i].ch && letters[i].y < (g_rcBox.bottom - g_rcBox.top)) {
-                    combo++;
-                    if (combo > maxCombo) maxCombo = combo;
-                    int addScore = (combo >= 3 ? 2 : 1); // 连击>=3分数加倍
-                    g_nScore += addScore;
-                    letters[i].ch = 'A' + rand() % 26;
-                    letters[i].y = 0;
+            if (mode == 0) {
+                for (int i = 0; i < letterCount; ++i) {
+                    if (ch == letters[i].word[0] && letters[i].y < (g_rcBox.bottom - g_rcBox.top)) {
+                        combo++;
+                        if (combo > maxCombo) maxCombo = combo;
+                        int addScore = (combo >= 3 ? 2 : 1);
+                        g_nScore += addScore;
+                        letters[i].word[0] = 'A' + rand() % 26;
+                        letters[i].word[1] = 0;
+                        letters[i].y = 0;
+                    }
+                }
+            } else {
+                // 单词模式，必须完整输入整个单词
+                for (int i = 0; i < letterCount; ++i) {
+                    int len = wcslen(letters[i].word);
+                    if (letters[i].y < (g_rcBox.bottom - g_rcBox.top)) {
+                        if (ch == letters[i].word[letters[i].typedLen]) {
+                            letters[i].typedLen++;
+                            if (letters[i].typedLen == len) {
+                                combo++;
+                                if (combo > maxCombo) maxCombo = combo;
+                                int addScore = (combo >= 3 ? 2 : 1);
+                                g_nScore += addScore;
+                                int idx = rand() % wordCount;
+                                wcsncpy_s(letters[i].word, 16, wordList[idx], 15);
+                                letters[i].word[15] = 0;
+                                letters[i].y = 0;
+                                letters[i].typedLen = 0;
+                            }
+                        } else if (letters[i].typedLen > 0) {
+                            // 输入错误，连击清零，重新输入
+                            combo = 0;
+                            letters[i].typedLen = 0;
+                        }
+                    }
                 }
             }
         }
@@ -301,6 +377,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             paused = !paused;
             if (paused) KillTimer(hWnd, g_uTimerId);
             else if (!gameOver) SetTimer(hWnd, g_uTimerId, 80, NULL);
+            InvalidateRect(hWnd, NULL, TRUE);
+        }
+        // 按F2切换模式
+        if (wParam == VK_F2) {
+            mode = (mode == 0 ? 1 : 0);
+            NewLetter(hWnd);
             InvalidateRect(hWnd, NULL, TRUE);
         }
         return 0;

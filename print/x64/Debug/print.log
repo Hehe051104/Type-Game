@@ -1,2 +1,5 @@
 ﻿  print.cpp
+D:\github\Type-Game\print.cpp(150,64): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据
+D:\github\Type-Game\print.cpp(178,68): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据
+D:\github\Type-Game\print.cpp(314,29): warning C4267: “初始化”: 从“size_t”转换到“int”，可能丢失数据
   print.vcxproj -> D:\github\Type-Game\x64\Debug\print.exe
