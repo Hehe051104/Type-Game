@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <time.h>
+#include <string>
 
 // 游戏区域和状态数据
 RECT   g_rcPlay;             // 客户区左侧可玩区域（含边距）
@@ -17,6 +18,11 @@ int    g_charWidth = 0;      // 字母字体宽度
 int    g_charHeight = 0;     // 字母字体高度
 HFONT  g_hFontLetter = NULL; // 下落字母和底部提示使用的等宽字体
 HFONT  g_hFontInfo   = NULL; // 信息区字体
+
+// 游戏状态
+int lives = 5;               // 玩家生命值
+bool gameOver = false;       // 游戏是否结束
+bool paused = false;         // 是否暂停
 
 // 根据当前得分动态调整速度（简单难度提升策略）
 void UpdateSpeed()
@@ -138,6 +144,13 @@ void PaintGame(HWND hWnd, HDC hdc)
     wsprintf(buf, TEXT("当前失误: %d"), g_nMiss);
     TextOut(hdc, infoX, infoY, buf, lstrlen(buf));
 
+    // 游戏失败提示（生命扣完）
+    if (gameOver) {
+        std::wstring over = L"游戏失败! 按 R 重新开始";
+        SetTextColor(hdc, RGB(255, 0, 0));
+        TextOutW(hdc, rcClient.right / 2 - 120, rcClient.bottom / 2, over.c_str(), (int)over.size());
+    }
+
     if (oldFont)
         SelectObject(hdc, oldFont);
 }
@@ -175,19 +188,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_TIMER:
-        if (wParam == g_uTimerId)
+        if (wParam == g_uTimerId && !paused && !gameOver)
         {
             g_nY += g_nSpeed;
 
-            // 判断是否到达底部（这里用游戏矩形内部的下边缘做判断）
             int boxHeight = g_rcBox.bottom - g_rcBox.top;
             int charHeight = g_charHeight > 0 ? g_charHeight : 28;
             int maxY = boxHeight > 0 ? boxHeight - charHeight - 5 : (g_rcPlay.bottom - g_rcPlay.top) - 120;
             if (g_nY >= maxY)
             {
-                // 掉到底部且未被击中，算一次失误
                 g_nMiss++;
-                NewLetter(hWnd);
+                lives--;
+                if (lives <= 0) {
+                    lives = 0;
+                    gameOver = true;
+                    KillTimer(hWnd, g_uTimerId);
+                } else {
+                    NewLetter(hWnd);
+                }
             }
             InvalidateRect(hWnd, NULL, TRUE);
         }
@@ -200,10 +218,39 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (ch >= 'a' && ch <= 'z')
             ch = ch - 'a' + 'A';
 
-        if (ch == g_chFalling)
+        if (!gameOver && lives > 0 && ch == g_chFalling)
         {
             g_nScore++;
             NewLetter(hWnd);
+        }
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+    {
+        // 处理游戏暂停与继续
+        if (wParam == VK_SPACE)
+        {
+            paused = !paused;
+            if (paused) KillTimer(hWnd, g_uTimerId);
+            else if (!gameOver) SetTimer(hWnd, g_uTimerId, 80, NULL);
+            InvalidateRect(hWnd, NULL, TRUE);
+        }
+        // 处理重新开始
+        else if (wParam == 'R' || wParam == 'r')
+        {
+            if (gameOver)
+            {
+                // 重置游戏状态
+                gameOver = false;
+                g_nScore = 0;
+                g_nMiss = 0;
+                lives = 5;
+                paused = false;
+                NewLetter(hWnd);
+                InvalidateRect(hWnd, NULL, TRUE);
+                SetTimer(hWnd, g_uTimerId, 80, NULL);
+            }
         }
         return 0;
     }
